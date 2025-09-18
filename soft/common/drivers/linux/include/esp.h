@@ -33,10 +33,12 @@ struct esp_access {
     unsigned int ddr_node;
     unsigned int in_place;
     unsigned int reuse_factor;
+    unsigned int debug;
 };
 
 #define ESP_IOC_RUN   _IO('E', 0)
 #define ESP_IOC_FLUSH _IO('E', 1)
+#define ESP_WAIT_JOB _IO('E', 2)
 
 #ifdef __KERNEL__
 
@@ -87,6 +89,7 @@ struct esp_device {
     unsigned int ddr_node;
     unsigned int in_place;
     unsigned int reuse_factor;
+    unsigned int debug;
 };
 
 struct esp_status {

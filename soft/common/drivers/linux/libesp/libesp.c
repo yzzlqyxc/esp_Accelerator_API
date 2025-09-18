@@ -108,7 +108,7 @@ void *accelerator_thread_p2p(void *ptr)
     return NULL;
 }
 
-void *accelerator_thread_serial(void *ptr)
+void* accelerator_thread_serial(void *ptr)
 {
     struct thread_args *args  = (struct thread_args *)ptr;
     esp_thread_info_t *thread = args->info;
@@ -129,6 +129,23 @@ void *accelerator_thread_serial(void *ptr)
         if (rc < 0) { perror("ioctl"); }
 
         info->hw_ns = ts_subtract(&th_start, &th_end);
+    }
+    return NULL;
+}
+
+void* accelerator_thread_wait(void *ptr) {
+    struct thread_args *args  = (struct thread_args *)ptr;
+    esp_thread_info_t *thread = args->info;
+    unsigned nacc             = args->nacc;
+    int i;
+    for (i = 0; i < nacc; i++) {
+        int rc                  = 0;
+        esp_thread_info_t *info = thread + i;
+
+        if (!info->run) continue;
+
+        rc = ioctl(info->fd, ESP_WAIT_JOB, info->esp_desc);
+        if (rc < 0) { perror("esp waiting error"); }
         close(info->fd);
     }
     free(ptr);
@@ -175,7 +192,6 @@ static void print_time_info(esp_thread_info_t *info[], unsigned long long hw_ns,
                             unsigned *nacc)
 {
     int i, j;
-
     printf("  > Test time: %llu ns\n", hw_ns);
     for (i = 0; i < nthreads; i++) {
         unsigned len = nacc[i];
@@ -189,7 +205,6 @@ static void print_time_info(esp_thread_info_t *info[], unsigned long long hw_ns,
 void esp_run(esp_thread_info_t cfg[], unsigned nacc)
 {
     int i;
-
     if (thread_is_p2p(&cfg[0])) {
         esp_thread_info_t *cfg_ptrs[1];
         cfg_ptrs[0] = cfg;
@@ -244,30 +259,53 @@ void esp_run_parallel(esp_thread_info_t *cfg[], unsigned nthreads, unsigned *nac
     }
 
     gettime(&th_start);
+    struct timespec a, b;
+    struct thread_args **args = malloc(sizeof(struct thread_args*) * nthreads);
+    gettime(&a);
     for (i = 0; i < nthreads; i++) {
-        struct thread_args *args = malloc(sizeof(struct thread_args));
-        ;
-        args->info = cfg[i];
-        args->nacc = nacc[i];
+        args[i] = malloc(sizeof(struct thread_args));
+
+        args[i]->info = cfg[i];
+        args[i]->nacc = nacc[i];
 
         if (thread_is_p2p(cfg[i])) {
-            if (nthreads == 1) accelerator_thread_p2p((void *)args);
+            if (nthreads == 1) accelerator_thread_p2p((void *)args[i]);
             else
-                rc = pthread_create(&thread[i], NULL, accelerator_thread_p2p, (void *)args);
+                rc = pthread_create(&thread[i], NULL, accelerator_thread_p2p, (void *)args[i]);
         }
         else {
-            if (nthreads == 1) accelerator_thread_serial((void *)args);
-            else
-                rc = pthread_create(&thread[i], NULL, accelerator_thread_serial, (void *)args);
+            if (nthreads == 1 || cfg[i]->esp_desc->debug) {
+                accelerator_thread_serial((void*)args[i]);
+            } else {
+                rc = pthread_create(&thread[i], NULL, accelerator_thread_serial, (void *)args[i]);
+            }
         }
 
         if (rc != 0) { perror("pthread_create"); }
     }
-    for (i = 0; i < nthreads; i++) {
-        if (nthreads > 1) rc = pthread_join(thread[i], NULL);
+    gettime(&b);
+    int t = ts_subtract(&a, &b);
+    printf("first time%d\n", t);
 
-        if (rc != 0) { perror("pthread_join"); }
+    gettime(&a);
+    for (i = 0; i < nthreads; i++) {
+        if (thread_is_p2p(cfg[i])) {
+            if (nthreads > 1) rc = pthread_join(thread[i], NULL);
+            if (rc != 0) { perror("pthread_join"); }
+        } else {
+            if (cfg[i]->esp_desc->debug){
+                accelerator_thread_wait((void*)args[i]);
+            } else {
+                if (nthreads > 1) rc = pthread_join(thread[i], NULL);
+                if (rc != 0) { perror("pthread_join"); }
+            }
+            gettime(&th_end);
+            if (rc != 0) { perror("accelerator waiting error!"); }
+        }
     }
+    gettime(&b);
+    t = ts_subtract(&a, &b);
+    printf("second time%d\n", t);
 
     gettime(&th_end);
     print_time_info(cfg, ts_subtract(&th_start, &th_end), nthreads, nacc);
